@@ -1,0 +1,17 @@
+{
+  "name": "rummy",
+  "version": "1.0.0",
+  "description": "**Runes & Rummy** is a fantasy-inspired single-player Gin Rummy experience where players enter a magical duel against an AI opponent known as **The Dark Wizard**. Combining traditional rummy mechanics with immersive fantasy aesthetics, the game challenges players to strategically create melds and runs while minimizing deadwood through tactical draws, discards, knocking, and gin declarations.",
+  "main": "script.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3"
+  }
+}
