@@ -155,6 +155,7 @@ io.on("connection", (socket) => {
     });
 
     // SERVER VALIDATION: Player requests card draw
+   // SERVER VALIDATION: Player requests card draw
     socket.on("playerDraw", () => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
@@ -173,6 +174,9 @@ io.on("connection", (socket) => {
         }
 
         room.hasDrawnThisTurn = true;
+        
+        // Broadcast updated room state so all clients know a card was drawn this turn
+        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
         socket.emit("drawApproved");
     });
 
@@ -202,12 +206,14 @@ io.on("connection", (socket) => {
 
         socket.emit("discardApproved");
 
+        // Broadcast updated room state and turn change
+        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
         io.to(roomCode).emit("turnChanged", {
             playerId: nextPlayer.id,
-            playerName: nextPlayer.name
+            playerName: nextPlayer.name,
+            currentTurnIndex: room.currentTurnIndex
         });
     });
-
     // PROTECTED STATE SYNC: Only turn player can sync state mid-turn
     socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
