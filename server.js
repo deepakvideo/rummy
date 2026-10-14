@@ -148,7 +148,14 @@ gameData.currentTurnPlayer =
     currentRoom.players[0].name;
 
 io.to(targetRoomCode)
-  .emit("gameStartSignal", gameData);
+    .emit("gameStartSignal", gameData);
+
+io.to(targetRoomCode)
+    .emit("turnChanged", {
+        playerId: currentRoom.players[0].id,
+        playerName: currentRoom.players[0].name
+    });
+
                     }
                 }
             }, 1000);
@@ -169,22 +176,45 @@ io.to(targetRoomCode)
     const turnPlayer =
         room.players[room.currentTurnIndex];
 
-    // Not his turn
+    console.log("==============");
+    console.log("DRAW REQUEST");
+    console.log("socket.id =", socket.id);
+
+    console.log(
+        "currentTurnIndex =",
+        room.currentTurnIndex
+    );
+
+    console.log(
+        "turnPlayer.id =",
+        turnPlayer ? turnPlayer.id : "NULL"
+    );
+
+    console.log(
+        "turnPlayer.name =",
+        turnPlayer ? turnPlayer.name : "NULL"
+    );
+
+    console.log("==============");
+
     if (!turnPlayer ||
         turnPlayer.id !== socket.id) {
 
+        console.log("DRAW REJECTED - NOT TURN");
+
         socket.emit("drawRejected", {
-            message: "Not your turn"
+            message: "Not your turn!"
         });
 
         return;
     }
 
-    // Already drew this turn
     if (room.hasDrawnThisTurn) {
 
+        console.log("DRAW REJECTED - ALREADY DRAWN");
+
         socket.emit("drawRejected", {
-            message: "Already drawn"
+            message: "Already drawn!"
         });
 
         return;
@@ -192,12 +222,11 @@ io.to(targetRoomCode)
 
     room.hasDrawnThisTurn = true;
 
-    console.log(
-        `[DRAW APPROVED] ${turnPlayer.name}`
-    );
+    console.log("DRAW APPROVED");
 
     socket.emit("drawApproved");
 });
+``
 
 
 
