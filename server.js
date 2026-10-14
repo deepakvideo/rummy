@@ -157,6 +157,7 @@ io.on("connection", (socket) => {
         });
     });
 
+<<<<<<< HEAD
     // Broadcast valid declaration event explicitly
     socket.on("playerDeclared", (data) => {
         const roomCode = socket.roomCode;
@@ -166,6 +167,15 @@ io.on("connection", (socket) => {
         console.log(`Player declared win in room ${roomCode}: ${data.winnerName}`);
 
         socket.to(roomCode).emit("playerDeclared", data);
+=======
+// Broadcast declaration to ALL players in the room
+    socket.on("playerDeclared", (data) => {
+        const roomCode = socket.roomCode;
+        if (roomCode) {
+            console.log(`Player declared win in room ${roomCode}`);
+            io.to(roomCode).emit("playerDeclared", data);
+        }
+>>>>>>> 442d7c0 (Update server.js with latest changes)
     });
 
     // Broadcast wrong show / invalid declaration event
