@@ -151,6 +151,29 @@ io.on("connection", (socket) => {
         );
     });
 
+// Handle valid declaration (Player won)
+    socket.on("playerDeclared", (data) => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
+
+        console.log(`Player declared in room ${roomCode}: ${data.winnerName}`);
+
+        // Broadcast to opponent in the same room
+        socket.to(roomCode).emit("playerDeclared", data);
+    });
+
+    // Handle player dropping out or making a wrong show
+    socket.on("playerDropped", (data) => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
+
+        console.log(`Player dropped / wrong show in room ${roomCode}`);
+
+        // Broadcast to opponent in the same room
+        socket.to(roomCode).emit("playerDropped", data);
+    });
+
+
     socket.on("disconnect", () => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
