@@ -138,16 +138,18 @@ io.on("connection", (socket) => {
     });
 
     // Main unified state synchronization handler
+// Main unified state synchronization handler
     socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
         rooms[roomCode].gameData = state.gameData || "";
-        // Reset or assign flags dynamically based on the current action
+        
+        // Explicitly clear or set flags based on what was sent
         rooms[roomCode].winnerName = state.winnerName || null;
         rooms[roomCode].wrongShowPlayer = state.wrongShowPlayer || null;
 
-        console.log(`Game state synced for room ${roomCode} | Winner: ${state.winnerName} | WrongShow: ${state.wrongShowPlayer}`);
+        console.log(`Game state synced for room ${roomCode} | Winner: ${rooms[roomCode].winnerName} | WrongShow: ${rooms[roomCode].wrongShowPlayer}`);
 
         // Broadcast to all peers in room
         io.to(roomCode).emit("gameStateUpdated", {
@@ -156,6 +158,7 @@ io.on("connection", (socket) => {
             wrongShowPlayer: rooms[roomCode].wrongShowPlayer
         });
     });
+
 
     // Broadcast valid declaration event explicitly
     socket.on("playerDeclared", (data) => {
