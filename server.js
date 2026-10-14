@@ -156,71 +156,51 @@ io.to(targetRoomCode)
     });
 
     // SERVER VALIDATION: Player requests card draw
-    socket.on("playerDraw", () => {
+   socket.on("playerDraw", () => {
 
     const roomCode = socket.roomCode;
 
-    console.log("DRAW REQUEST", socket.id);
-
     if (!roomCode || !rooms[roomCode]) {
-        console.log("ROOM NOT FOUND");
         return;
     }
 
     const room = rooms[roomCode];
 
-    console.log(
-        "TURN INDEX:",
-        room.currentTurnIndex
-    );
-
-    console.log(
-        "TURN PLAYER:",
-        room.players[room.currentTurnIndex]?.name
-    );
-
-    console.log(
-        "HAS DRAWN:",
-        room.hasDrawnThisTurn
-    );
-
     const turnPlayer =
         room.players[room.currentTurnIndex];
 
+    // Not his turn
     if (!turnPlayer ||
         turnPlayer.id !== socket.id) {
 
-        console.log("DRAW REJECTED - NOT TURN");
-
-        socket.emit(
-            "drawRejected",
-            { message: "Not your turn!" }
-        );
+        socket.emit("drawRejected", {
+            message: "Not your turn"
+        });
 
         return;
     }
 
+    // Already drew this turn
     if (room.hasDrawnThisTurn) {
 
-        console.log("DRAW REJECTED - ALREADY DRAWN");
-
-        socket.emit(
-            "drawRejected",
-            {
-                message:
-                    "You already drew a card this turn!"
-            }
-        );
+        socket.emit("drawRejected", {
+            message: "Already drawn"
+        });
 
         return;
     }
 
     room.hasDrawnThisTurn = true;
 
-    console.log("DRAW APPROVED");
+    console.log(
+        `[DRAW APPROVED] ${turnPlayer.name}`
+    );
 
     socket.emit("drawApproved");
 });
+
+
+
     // SERVER VALIDATION: Player requests card discard / turn end
    socket.on("playerDiscard", () => {
 
