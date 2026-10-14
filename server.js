@@ -289,5 +289,5 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Multiplayer authorative server running on port ${PORT}`);
+    console.log(`Multiplayer authoritative server running on port ${PORT}`);
 });
