@@ -44,11 +44,15 @@ function generateRoomCode() {
 }
 
 function getCleanRoomState(room) {
+    const currentTurnPlayer = room.players[room.currentTurnIndex] || null;
     return {
         id: room.id,
         started: room.started,
         timerVal: room.timerVal,
         gameData: room.gameData || "",
+        currentTurnIndex: room.currentTurnIndex,
+        hasDrawnThisTurn: room.hasDrawnThisTurn,
+        currentTurnPlayerId: currentTurnPlayer ? currentTurnPlayer.id : null,
         players: room.players.map((p) => ({
             id: p.id,
             name: p.name,
@@ -63,6 +67,7 @@ io.on("connection", (socket) => {
     socket.on("joinGame", (playerData) => {
         let playerName = playerData && playerData.name ? playerData.name : `Player_${socket.id.substring(0, 4)}`;
 
+        // Matchmaking room allocation
         if (
             !activeMatchRoom ||
             !rooms[activeMatchRoom] ||
@@ -82,7 +87,9 @@ io.on("connection", (socket) => {
                 started: false,
                 countdown: null,
                 timerVal: COUNTDOWN_SECONDS,
-                gameData: ""
+                gameData: "",
+                currentTurnIndex: 0,
+                hasDrawnThisTurn: false
             };
             currentRoom = rooms[targetRoomCode];
         }
@@ -92,11 +99,12 @@ io.on("connection", (socket) => {
 
         const existingPlayerIndex = currentRoom.players.findIndex(p => p.id === socket.id);
         if (existingPlayerIndex === -1) {
-            currentRoom.players.push({
+            const player = {
                 id: socket.id,
                 name: playerName,
                 isHost: currentRoom.players.length === 0
-            });
+            };
+            currentRoom.players.push(player);
         }
 
         if (currentRoom.players.length >= MAX_PLAYERS_PER_ROOM) {
@@ -106,8 +114,9 @@ io.on("connection", (socket) => {
         socket.emit("assignedRoom", targetRoomCode);
         io.to(targetRoomCode).emit("roomUpdate", getCleanRoomState(currentRoom));
 
-        console.log(`${playerName} joined room ${targetRoomCode}. Total: ${currentRoom.players.length}`);
+        console.log(`${playerName} (${socket.id}) joined room ${targetRoomCode}. Total: ${currentRoom.players.length}`);
 
+        // Start countdown when minimum players join
         if (
             currentRoom.players.length >= MIN_PLAYERS_PER_ROOM &&
             !currentRoom.countdown &&
@@ -128,33 +137,106 @@ io.on("connection", (socket) => {
 
                     if (!currentRoom.started) {
                         currentRoom.started = true;
-                        console.log(`Room ${targetRoomCode} starting game.`);
+                        currentRoom.currentTurnIndex = 0;
+                        currentRoom.hasDrawnThisTurn = false;
+
+                        console.log(`Room ${targetRoomCode} started with ${currentRoom.players.length} players.`);
+
                         io.to(targetRoomCode).emit("gameStartSignal", getCleanRoomState(currentRoom));
+                        
+                        io.to(targetRoomCode).emit("turnChanged", {
+                            playerId: currentRoom.players[0].id,
+                            playerName: currentRoom.players[0].name
+                        });
                     }
                 }
             }, 1000);
         }
     });
 
-    // RELAY GAME STATE: Broadcasts moves and card updates to opponents in the room
+    // SERVER VALIDATION: Player requests card draw
+    socket.on("playerDraw", () => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
+
+        const room = rooms[roomCode];
+        const turnPlayer = room.players[room.currentTurnIndex];
+
+        if (!turnPlayer || turnPlayer.id !== socket.id) {
+            socket.emit("drawRejected", { message: "Not your turn!" });
+            return;
+        }
+
+        if (room.hasDrawnThisTurn) {
+            socket.emit("drawRejected", { message: "You already drew a card this turn!" });
+            return;
+        }
+
+        room.hasDrawnThisTurn = true;
+        socket.emit("drawApproved");
+    });
+
+    // SERVER VALIDATION: Player requests card discard / turn end
+    socket.on("playerDiscard", () => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
+
+        const room = rooms[roomCode];
+        const turnPlayer = room.players[room.currentTurnIndex];
+
+        if (!turnPlayer || turnPlayer.id !== socket.id) {
+            socket.emit("discardRejected", { message: "Not your turn!" });
+            return;
+        }
+
+        if (!room.hasDrawnThisTurn) {
+            socket.emit("discardRejected", { message: "Draw a card first before discarding!" });
+            return;
+        }
+
+        // Reset turn flags and rotate turn to next player
+        room.hasDrawnThisTurn = false;
+        room.currentTurnIndex = (room.currentTurnIndex + 1) % room.players.length;
+
+        const nextPlayer = room.players[room.currentTurnIndex];
+
+        socket.emit("discardApproved");
+
+        io.to(roomCode).emit("turnChanged", {
+            playerId: nextPlayer.id,
+            playerName: nextPlayer.name
+        });
+    });
+
+    // PROTECTED STATE SYNC: Only turn player can sync state mid-turn
     socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
-        rooms[roomCode].gameData = state.gameData || "";
-        rooms[roomCode].winnerName = state.winnerName || null;
-        rooms[roomCode].wrongShowPlayer = state.wrongShowPlayer || null;
+        const room = rooms[roomCode];
+        const turnPlayer = room.players[room.currentTurnIndex];
+
+        if (!turnPlayer || turnPlayer.id !== socket.id) {
+            socket.emit("syncRejected", { message: "Not your turn to modify state" });
+            return;
+        }
+
+        room.gameData = state.gameData || "";
+        room.winnerName = state.winnerName || null;
+        room.wrongShowPlayer = state.wrongShowPlayer || null;
 
         socket.to(roomCode).emit("gameStateUpdated", {
-            gameData: rooms[roomCode].gameData,
-            winnerName: rooms[roomCode].winnerName,
-            wrongShowPlayer: rooms[roomCode].wrongShowPlayer
+            gameData: room.gameData,
+            winnerName: room.winnerName,
+            wrongShowPlayer: room.wrongShowPlayer
         });
     });
 
+    // Game End & Drop Handlers
     socket.on("playerDeclared", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
+
         rooms[roomCode].winnerName = data.winnerName;
         socket.to(roomCode).emit("playerDeclared", data);
     });
@@ -162,12 +244,14 @@ io.on("connection", (socket) => {
     socket.on("playerWrongShow", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
+
         socket.to(roomCode).emit("playerWrongShow", data);
     });
 
     socket.on("playerDropped", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
+
         socket.to(roomCode).emit("playerDropped", data);
     });
 
@@ -176,6 +260,8 @@ io.on("connection", (socket) => {
         if (!roomCode || !rooms[roomCode]) return;
 
         const room = rooms[roomCode];
+        console.log(`Client disconnected: ${socket.id}`);
+
         room.players = room.players.filter((p) => p.id !== socket.id);
 
         if (room.players.length < MIN_PLAYERS_PER_ROOM && room.countdown && !room.started) {
@@ -189,6 +275,7 @@ io.on("connection", (socket) => {
             if (room.countdown) clearInterval(room.countdown);
             delete rooms[roomCode];
             if (activeMatchRoom === roomCode) activeMatchRoom = null;
+            console.log(`Room deleted: ${roomCode}`);
             return;
         }
 
@@ -202,5 +289,5 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Multiplayer server running on port ${PORT}`);
+    console.log(`Multiplayer authorative server running on port ${PORT}`);
 });
