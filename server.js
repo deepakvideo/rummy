@@ -158,6 +158,16 @@ socket.on("syncGameState", (state) => {
         );
     });
 
+socket.on("playerWrongShow", (data) => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
+
+        console.log(`Player made a wrong show in room ${roomCode}: ${data.playerName}`);
+
+        // Broadcast to all other players in the room
+        socket.to(roomCode).emit("playerWrongShow", data);
+    });
+
 socket.on("playerDeclared", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
