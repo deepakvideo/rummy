@@ -137,28 +137,35 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("syncGameState", (state) => {
+socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
         rooms[roomCode].gameData = state.gameData;
-        console.log(`Game state synced for room ${roomCode}`);
+        if (state.winnerName) {
+            rooms[roomCode].winnerName = state.winnerName;
+        }
 
-        // Broadcast updated state to all peers in the room
+        console.log(`Game state synced for room ${roomCode} ${state.winnerName ? '(Winner: ' + state.winnerName + ')' : ''}`);
+
+        // Broadcast updated state and winner details to all peers in the room
         io.to(roomCode).emit(
             "gameStateUpdated",
-            { gameData: rooms[roomCode].gameData }
+            { 
+                gameData: rooms[roomCode].gameData,
+                winnerName: rooms[roomCode].winnerName 
+            }
         );
     });
 
-// Handle valid declaration (Player won)
-    socket.on("playerDeclared", (data) => {
+socket.on("playerDeclared", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
-        console.log(`Player declared in room ${roomCode}: ${data.winnerName}`);
+        rooms[roomCode].winnerName = data.winnerName;
+        console.log(`Player declared win in room ${roomCode}: ${data.winnerName}`);
 
-        // Broadcast to opponent in the same room
+        // Broadcast winner details to all other players in the room
         socket.to(roomCode).emit("playerDeclared", data);
     });
 
