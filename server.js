@@ -136,27 +136,25 @@ io.on("connection", (socket) => {
             }, 1000);
         }
     });
-
 socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
-        rooms[roomCode].gameData = state.gameData;
-        if (state.winnerName) {
-            rooms[roomCode].winnerName = state.winnerName;
-        }
+        rooms[roomCode].gameData = state.gameData || "";
+        rooms[roomCode].winnerName = state.winnerName || null;
+        rooms[roomCode].wrongShowPlayer = state.wrongShowPlayer || null;
 
-        console.log(`Game state synced for room ${roomCode} ${state.winnerName ? '(Winner: ' + state.winnerName + ')' : ''}`);
+        console.log(`Game state synced for room ${roomCode} | Winner: ${state.winnerName} | WrongShow: ${state.wrongShowPlayer}`);
 
-        // Broadcast updated state and winner details to all peers in the room
-        io.to(roomCode).emit(
-            "gameStateUpdated",
-            { 
-                gameData: rooms[roomCode].gameData,
-                winnerName: rooms[roomCode].winnerName 
-            }
-        );
+        // Broadcast to all peers in room
+        io.to(roomCode).emit("gameStateUpdated", {
+            gameData: rooms[roomCode].gameData,
+            winnerName: rooms[roomCode].winnerName,
+            wrongShowPlayer: rooms[roomCode].wrongShowPlayer
+        });
     });
+
+
 
 // Broadcast wrong show / invalid declaration event
     socket.on("playerWrongShow", (data) => {
