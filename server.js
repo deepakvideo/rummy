@@ -136,11 +136,14 @@ io.on("connection", (socket) => {
             }, 1000);
         }
     });
-socket.on("syncGameState", (state) => {
+
+    // Main unified state synchronization handler
+    socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
         rooms[roomCode].gameData = state.gameData || "";
+        // Reset or assign flags dynamically based on the current action
         rooms[roomCode].winnerName = state.winnerName || null;
         rooms[roomCode].wrongShowPlayer = state.wrongShowPlayer || null;
 
@@ -154,40 +157,36 @@ socket.on("syncGameState", (state) => {
         });
     });
 
-
-
-// Broadcast wrong show / invalid declaration event
-    socket.on("playerWrongShow", (data) => {
-        const roomCode = socket.roomCode;
-        if (!roomCode || !rooms[roomCode]) return;
-
-        console.log(`Wrong show declared in room ${roomCode} by ${data.playerName}`);
-
-        // Relay to opponent in the same room
-        socket.to(roomCode).emit("playerWrongShow", data);
-    });
-socket.on("playerDeclared", (data) => {
+    // Broadcast valid declaration event explicitly
+    socket.on("playerDeclared", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
         rooms[roomCode].winnerName = data.winnerName;
         console.log(`Player declared win in room ${roomCode}: ${data.winnerName}`);
 
-        // Broadcast winner details to all other players in the room
         socket.to(roomCode).emit("playerDeclared", data);
     });
 
-    // Handle player dropping out or making a wrong show
+    // Broadcast wrong show / invalid declaration event
+    socket.on("playerWrongShow", (data) => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
+
+        console.log(`Wrong show declared in room ${roomCode} by ${data.playerName}`);
+
+        socket.to(roomCode).emit("playerWrongShow", data);
+    });
+
+    // Handle player dropping out or folding
     socket.on("playerDropped", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
-        console.log(`Player dropped / wrong show in room ${roomCode}`);
+        console.log(`Player dropped in room ${roomCode}`);
 
-        // Broadcast to opponent in the same room
         socket.to(roomCode).emit("playerDropped", data);
     });
-
 
     socket.on("disconnect", () => {
         const roomCode = socket.roomCode;
