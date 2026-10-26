@@ -67,21 +67,30 @@ io.on("connection", (socket) => {
     socket.on("joinGame", (playerData) => {
         let playerName = playerData && playerData.name ? playerData.name : `Player_${socket.id.substring(0, 4)}`;
 
-        // Matchmaking room allocation
-        if (
-            !activeMatchRoom ||
-            !rooms[activeMatchRoom] ||
-            rooms[activeMatchRoom].players.length >= MAX_PLAYERS_PER_ROOM ||
-            rooms[activeMatchRoom].started
-        ) {
-            activeMatchRoom = generateRoomCode();
+        // Matchmaking room allocation: Find an existing open room that hasn't started and has space (< 5 players)
+        let targetRoomCode = null;
+
+        if (activeMatchRoom && rooms[activeMatchRoom] && !rooms[activeMatchRoom].started && rooms[activeMatchRoom].players.length < MAX_PLAYERS_PER_ROOM) {
+            targetRoomCode = activeMatchRoom;
+        } else {
+            // Search all rooms for any available waiting table
+            let openRoomCode = Object.keys(rooms).find(code => 
+                !rooms[code].started && rooms[code].players.length < MAX_PLAYERS_PER_ROOM
+            );
+
+            if (openRoomCode) {
+                targetRoomCode = openRoomCode;
+                activeMatchRoom = openRoomCode;
+            } else {
+                targetRoomCode = generateRoomCode();
+                activeMatchRoom = targetRoomCode;
+            }
         }
 
-        let targetRoomCode = activeMatchRoom;
         let currentRoom = rooms[targetRoomCode];
 
         if (!currentRoom) {
-            rooms[targetRoomCode] = {
+            currentRoom = {
                 id: targetRoomCode,
                 players: [],
                 started: false,
@@ -91,12 +100,13 @@ io.on("connection", (socket) => {
                 currentTurnIndex: 0,
                 hasDrawnThisTurn: false
             };
-            currentRoom = rooms[targetRoomCode];
+            rooms[targetRoomCode] = currentRoom;
         }
 
         socket.join(targetRoomCode);
         socket.roomCode = targetRoomCode;
 
+        // Prevent duplicate player entries
         const existingPlayerIndex = currentRoom.players.findIndex(p => p.id === socket.id);
         if (existingPlayerIndex === -1) {
             const player = {
@@ -105,8 +115,11 @@ io.on("connection", (socket) => {
                 isHost: currentRoom.players.length === 0
             };
             currentRoom.players.push(player);
+        } else {
+            currentRoom.players[existingPlayerIndex].id = socket.id;
         }
 
+        // If room reaches 5 players, clear activeMatchRoom so the next player creates a new table
         if (currentRoom.players.length >= MAX_PLAYERS_PER_ROOM) {
             activeMatchRoom = null;
         }
@@ -116,7 +129,7 @@ io.on("connection", (socket) => {
 
         console.log(`${playerName} (${socket.id}) joined room ${targetRoomCode}. Total: ${currentRoom.players.length}`);
 
-        // Start countdown when minimum players join
+        // Start countdown when at least 2 players join and countdown isn't running yet
         if (
             currentRoom.players.length >= MIN_PLAYERS_PER_ROOM &&
             !currentRoom.countdown &&
@@ -154,7 +167,6 @@ io.on("connection", (socket) => {
         }
     });
 
-    // SERVER VALIDATION: Player requests card draw
    // SERVER VALIDATION: Player requests card draw
     socket.on("playerDraw", () => {
         const roomCode = socket.roomCode;
