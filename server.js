@@ -33,7 +33,7 @@ app.get("/health", (req, res) => {
 });
 
 function getNextActivePlayer(room) {
-    if (room.players.length === 0) {
+    if (!room.players || room.players.length === 0) {
         return 0;
     }
 
@@ -49,7 +49,7 @@ function getNextActivePlayer(room) {
         }
     } while (count < room.players.length);
 
-    return next;
+    return room.currentTurnIndex;
 }
 
 function generateRoomCode() {
@@ -204,11 +204,15 @@ io.on("connection", (socket) => {
                         console.log(`Room ${targetRoomCode} started with ${currentRoom.players.length} players.`);
 
                         io.to(targetRoomCode).emit("gameStartSignal", getCleanRoomState(currentRoom));
-                        io.to(targetRoomCode).emit("turnChanged", {
-                            playerId: currentRoom.players[currentRoom.currentTurnIndex].id,
-                            playerName: currentRoom.players[currentRoom.currentTurnIndex].name,
-                            currentTurnIndex: currentRoom.currentTurnIndex
-                        });
+                        
+                        const activeTurnPlayer = currentRoom.players[currentRoom.currentTurnIndex];
+                        if (activeTurnPlayer) {
+                            io.to(targetRoomCode).emit("turnChanged", {
+                                playerId: activeTurnPlayer.id,
+                                playerName: activeTurnPlayer.name,
+                                currentTurnIndex: currentRoom.currentTurnIndex
+                            });
+                        }
                     }
                 }
             }, 1000);
@@ -276,11 +280,13 @@ io.on("connection", (socket) => {
         socket.emit("discardApproved");
 
         io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
-        io.to(roomCode).emit("turnChanged", {
-            playerId: nextPlayer.id,
-            playerName: nextPlayer.name,
-            currentTurnIndex: room.currentTurnIndex
-        });
+        if (nextPlayer) {
+            io.to(roomCode).emit("turnChanged", {
+                playerId: nextPlayer.id,
+                playerName: nextPlayer.name,
+                currentTurnIndex: room.currentTurnIndex
+            });
+        }
     });
 
     socket.on("syncGameState", (state) => {
@@ -295,7 +301,6 @@ io.on("connection", (socket) => {
             return;
         }
 
-        // Only sync game data, keeping authoritative game lifecycle states secure
         room.gameData = state.gameData || "";
 
         socket.to(roomCode).emit("gameStateUpdated", {
@@ -306,106 +311,58 @@ io.on("connection", (socket) => {
         });
     });
 
-socket.on("playerDeclared", () => {
+    socket.on("playerDeclared", () => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
 
-    const roomCode = socket.roomCode;
+        const room = rooms[roomCode];
+        if (!room.started || room.winnerName) return;
 
-    if (!roomCode || !rooms[roomCode]) {
-        return;
-    }
+        const turnPlayer = room.players[room.currentTurnIndex];
+        if (!turnPlayer || turnPlayer.id !== socket.id || turnPlayer.dropped) return;
 
-    const room = rooms[roomCode];
+        room.winnerName = turnPlayer.name;
+        room.hasDrawnThisTurn = false;
 
-    if (!room.started) {
-        return;
-    }
+        io.to(roomCode).emit("playerDeclared", { winnerName: turnPlayer.name });
+        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
+    });
 
-    if (room.winnerName) {
-        return;
-    }
+    socket.on("playerWrongShow", (data) => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
 
-    const turnPlayer =
-        room.players[room.currentTurnIndex];
+        const room = rooms[roomCode];
+        const player = room.players.find(p => p.id === socket.id);
 
-    if (
-        !turnPlayer ||
-        turnPlayer.id !== socket.id ||
-        turnPlayer.dropped
-    ) {
-        return;
-    }
+        if (!player || player.dropped) return;
 
-    room.winnerName = turnPlayer.name;
-
-    room.hasDrawnThisTurn = false;
-
-    io.to(roomCode).emit(
-        "playerDeclared",
-        {
-            winnerName: turnPlayer.name
-        }
-    );
-
-    io.to(roomCode).emit(
-        "roomUpdate",
-        getCleanRoomState(room)
-    );
-});
-
-  socket.on("playerWrongShow", (data) => {
-
-    const roomCode = socket.roomCode;
-
-    if (!roomCode || !rooms[roomCode])
-        return;
-
-    const room =
-        rooms[roomCode];
-
-    const player =
-        room.players.find(
-            p => p.id === socket.id
-        );
-
-    if (
-        !player ||
-        player.dropped
-    ) {
-        return;
-    }
-
-    socket.to(roomCode).emit(
-        "playerWrongShow",
-        data
-    );
-});
+        socket.to(roomCode).emit("playerWrongShow", data);
+    });
 
     socket.on("playerDropped", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
         const room = rooms[roomCode];
-     const player = room.players.find(
-    p => p.id === socket.id
-);
+        const player = room.players.find(p => p.id === socket.id);
 
-if (!player) return;
+        if (!player || player.dropped) return;
 
-if (player.dropped) return;
-
-player.dropped = true;
-
+        player.dropped = true;
 
         if (room.players[room.currentTurnIndex]?.id === socket.id) {
             room.hasDrawnThisTurn = false;
             room.currentTurnIndex = getNextActivePlayer(room);
 
             const nextPlayer = room.players[room.currentTurnIndex];
-            io.to(roomCode).emit("turnChanged", {
-                playerId: nextPlayer.id,
-                playerName: nextPlayer.name,
-                currentTurnIndex: room.currentTurnIndex
-            });
+            if (nextPlayer) {
+                io.to(roomCode).emit("turnChanged", {
+                    playerId: nextPlayer.id,
+                    playerName: nextPlayer.name,
+                    currentTurnIndex: room.currentTurnIndex
+                });
+            }
         }
 
         io.to(roomCode).emit("playerDropped", data);
@@ -417,6 +374,7 @@ player.dropped = true;
                 winnerName: activePlayers[0].name
             });
         }
+        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
     });
 
     socket.on("disconnect", () => {
@@ -430,32 +388,26 @@ player.dropped = true;
         if (removedIndex === -1) return;
 
         const wasCurrentTurn = removedIndex === room.currentTurnIndex;
-
         room.players.splice(removedIndex, 1);
 
         if (room.started) {
-            if (removedIndex < room.currentTurnIndex) {
-                room.currentTurnIndex--;
-            }
-
-            if (room.currentTurnIndex >= room.players.length) {
-                room.currentTurnIndex = 0;
-            }
-
-            room.hasDrawnThisTurn = false;
-
-            if (wasCurrentTurn && room.players.length > 0) {
+            if (room.players.length > 0) {
                 if (room.currentTurnIndex >= room.players.length) {
                     room.currentTurnIndex = 0;
                 }
-
-                const nextPlayer = room.players[room.currentTurnIndex];
-
-                io.to(roomCode).emit("turnChanged", {
-                    playerId: nextPlayer.id,
-                    playerName: nextPlayer.name,
-                    currentTurnIndex: room.currentTurnIndex
-                });
+                
+                if (wasCurrentTurn) {
+                    room.hasDrawnThisTurn = false;
+                    room.currentTurnIndex = getNextActivePlayer(room);
+                    const nextPlayer = room.players[room.currentTurnIndex];
+                    if (nextPlayer) {
+                        io.to(roomCode).emit("turnChanged", {
+                            playerId: nextPlayer.id,
+                            playerName: nextPlayer.name,
+                            currentTurnIndex: room.currentTurnIndex
+                        });
+                    }
+                }
             }
         }
 
