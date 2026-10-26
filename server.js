@@ -17,11 +17,12 @@ app.use(express.static(__dirname));
 const rooms = {};
 let activeMatchRoom = null;
 
-const MAX_PLAYERS_PER_ROOM = 2;
-const COUNTDOWN_SECONDS = 15;
+const MIN_PLAYERS_PER_ROOM = 2;
+const MAX_PLAYERS_PER_ROOM = 5;
+const COUNTDOWN_SECONDS = 20;
 
 app.get("/", (req, res) => {
-    res.send("Rummy Game Socket.IO Backend is Running!");
+    res.send("Rummy Game Socket.IO Backend Running");
 });
 
 app.get("/health", (req, res) => {
@@ -43,11 +44,15 @@ function generateRoomCode() {
 }
 
 function getCleanRoomState(room) {
+    const currentTurnPlayer = room.players[room.currentTurnIndex] || null;
     return {
         id: room.id,
         started: room.started,
         timerVal: room.timerVal,
         gameData: room.gameData || "",
+        currentTurnIndex: room.currentTurnIndex,
+        hasDrawnThisTurn: room.hasDrawnThisTurn,
+        currentTurnPlayerId: currentTurnPlayer ? currentTurnPlayer.id : null,
         players: room.players.map((p) => ({
             id: p.id,
             name: p.name,
@@ -61,8 +66,8 @@ io.on("connection", (socket) => {
 
     socket.on("joinGame", (playerData) => {
         let playerName = playerData && playerData.name ? playerData.name : `Player_${socket.id.substring(0, 4)}`;
-        
-        // Find or create an open matching room
+
+        // Matchmaking room allocation
         if (
             !activeMatchRoom ||
             !rooms[activeMatchRoom] ||
@@ -82,7 +87,9 @@ io.on("connection", (socket) => {
                 started: false,
                 countdown: null,
                 timerVal: COUNTDOWN_SECONDS,
-                gameData: ""
+                gameData: "",
+                currentTurnIndex: 0,
+                hasDrawnThisTurn: false
             };
             currentRoom = rooms[targetRoomCode];
         }
@@ -90,7 +97,6 @@ io.on("connection", (socket) => {
         socket.join(targetRoomCode);
         socket.roomCode = targetRoomCode;
 
-        // Check if player already exists in room
         const existingPlayerIndex = currentRoom.players.findIndex(p => p.id === socket.id);
         if (existingPlayerIndex === -1) {
             const player = {
@@ -101,89 +107,156 @@ io.on("connection", (socket) => {
             currentRoom.players.push(player);
         }
 
+        if (currentRoom.players.length >= MAX_PLAYERS_PER_ROOM) {
+            activeMatchRoom = null;
+        }
+
         socket.emit("assignedRoom", targetRoomCode);
         io.to(targetRoomCode).emit("roomUpdate", getCleanRoomState(currentRoom));
 
-        console.log(`${playerName} (${socket.id}) joined room ${targetRoomCode}. Total players: ${currentRoom.players.length}`);
+        console.log(`${playerName} (${socket.id}) joined room ${targetRoomCode}. Total: ${currentRoom.players.length}`);
 
-        // Start countdown when room is full
+        // Start countdown when minimum players join
         if (
-            currentRoom.players.length >= MAX_PLAYERS_PER_ROOM &&
+            currentRoom.players.length >= MIN_PLAYERS_PER_ROOM &&
             !currentRoom.countdown &&
             !currentRoom.started
         ) {
             currentRoom.timerVal = COUNTDOWN_SECONDS;
-
             io.to(targetRoomCode).emit("countdownUpdate", currentRoom.timerVal);
 
             currentRoom.countdown = setInterval(() => {
                 currentRoom.timerVal--;
-
                 io.to(targetRoomCode).emit("countdownUpdate", currentRoom.timerVal);
 
-                if (currentRoom.timerVal <= 0) {
-                    clearInterval(currentRoom.countdown);
-                    currentRoom.countdown = null;
-                    currentRoom.started = true;
+                if (currentRoom.timerVal <= 0 || currentRoom.players.length >= MAX_PLAYERS_PER_ROOM) {
+                    if (currentRoom.countdown) {
+                        clearInterval(currentRoom.countdown);
+                        currentRoom.countdown = null;
+                    }
 
-                    console.log(`Countdown finished for room ${targetRoomCode}. Sending gameStartSignal.`);
+                    if (!currentRoom.started) {
+                        currentRoom.started = true;
+                        currentRoom.currentTurnIndex = 0;
+                        currentRoom.hasDrawnThisTurn = false;
 
-                    io.to(targetRoomCode).emit(
-                        "gameStartSignal",
-                        getCleanRoomState(currentRoom)
-                    );
+                        console.log(`Room ${targetRoomCode} started with ${currentRoom.players.length} players.`);
+
+                        io.to(targetRoomCode).emit("gameStartSignal", getCleanRoomState(currentRoom));
+                        
+                        io.to(targetRoomCode).emit("turnChanged", {
+                            playerId: currentRoom.players[0].id,
+                            playerName: currentRoom.players[0].name
+                        });
+                    }
                 }
             }, 1000);
         }
     });
 
-    // Main unified state synchronization handler
+    // SERVER VALIDATION: Player requests card draw
+   // SERVER VALIDATION: Player requests card draw
+    socket.on("playerDraw", () => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
+
+        const room = rooms[roomCode];
+        const turnPlayer = room.players[room.currentTurnIndex];
+
+        if (!turnPlayer || turnPlayer.id !== socket.id) {
+            socket.emit("drawRejected", { message: "Not your turn!" });
+            return;
+        }
+
+        if (room.hasDrawnThisTurn) {
+            socket.emit("drawRejected", { message: "You already drew a card this turn!" });
+            return;
+        }
+
+        room.hasDrawnThisTurn = true;
+        
+        // Broadcast updated room state so all clients know a card was drawn this turn
+        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
+        socket.emit("drawApproved");
+    });
+
+    // SERVER VALIDATION: Player requests card discard / turn end
+    socket.on("playerDiscard", () => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
+
+        const room = rooms[roomCode];
+        const turnPlayer = room.players[room.currentTurnIndex];
+
+        if (!turnPlayer || turnPlayer.id !== socket.id) {
+            socket.emit("discardRejected", { message: "Not your turn!" });
+            return;
+        }
+
+        if (!room.hasDrawnThisTurn) {
+            socket.emit("discardRejected", { message: "Draw a card first before discarding!" });
+            return;
+        }
+
+        // Reset turn flags and rotate turn to next player
+        room.hasDrawnThisTurn = false;
+        room.currentTurnIndex = (room.currentTurnIndex + 1) % room.players.length;
+
+        const nextPlayer = room.players[room.currentTurnIndex];
+
+        socket.emit("discardApproved");
+
+        // Broadcast updated room state and turn change
+        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
+        io.to(roomCode).emit("turnChanged", {
+            playerId: nextPlayer.id,
+            playerName: nextPlayer.name,
+            currentTurnIndex: room.currentTurnIndex
+        });
+    });
+    // PROTECTED STATE SYNC: Only turn player can sync state mid-turn
     socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
-        rooms[roomCode].gameData = state.gameData || "";
-        // Reset or assign flags dynamically based on the current action
-        rooms[roomCode].winnerName = state.winnerName || null;
-        rooms[roomCode].wrongShowPlayer = state.wrongShowPlayer || null;
+        const room = rooms[roomCode];
+        const turnPlayer = room.players[room.currentTurnIndex];
 
-        console.log(`Game state synced for room ${roomCode} | Winner: ${state.winnerName} | WrongShow: ${state.wrongShowPlayer}`);
+        if (!turnPlayer || turnPlayer.id !== socket.id) {
+            socket.emit("syncRejected", { message: "Not your turn to modify state" });
+            return;
+        }
 
-        // Broadcast to all peers in room
-        io.to(roomCode).emit("gameStateUpdated", {
-            gameData: rooms[roomCode].gameData,
-            winnerName: rooms[roomCode].winnerName,
-            wrongShowPlayer: rooms[roomCode].wrongShowPlayer
+        room.gameData = state.gameData || "";
+        room.winnerName = state.winnerName || null;
+        room.wrongShowPlayer = state.wrongShowPlayer || null;
+
+        socket.to(roomCode).emit("gameStateUpdated", {
+            gameData: room.gameData,
+            winnerName: room.winnerName,
+            wrongShowPlayer: room.wrongShowPlayer
         });
     });
 
-    // Broadcast valid declaration event explicitly
+    // Game End & Drop Handlers
     socket.on("playerDeclared", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
         rooms[roomCode].winnerName = data.winnerName;
-        console.log(`Player declared win in room ${roomCode}: ${data.winnerName}`);
-
         socket.to(roomCode).emit("playerDeclared", data);
     });
 
-    // Broadcast wrong show / invalid declaration event
     socket.on("playerWrongShow", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
-        console.log(`Wrong show declared in room ${roomCode} by ${data.playerName}`);
-
         socket.to(roomCode).emit("playerWrongShow", data);
     });
 
-    // Handle player dropping out or folding
     socket.on("playerDropped", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
-
-        console.log(`Player dropped in room ${roomCode}`);
 
         socket.to(roomCode).emit("playerDropped", data);
     });
@@ -197,7 +270,7 @@ io.on("connection", (socket) => {
 
         room.players = room.players.filter((p) => p.id !== socket.id);
 
-        if (room.players.length < MAX_PLAYERS_PER_ROOM && room.countdown) {
+        if (room.players.length < MIN_PLAYERS_PER_ROOM && room.countdown && !room.started) {
             clearInterval(room.countdown);
             room.countdown = null;
             room.timerVal = COUNTDOWN_SECONDS;
@@ -212,7 +285,6 @@ io.on("connection", (socket) => {
             return;
         }
 
-        // Reassign host if needed
         if (!room.players.some((p) => p.isHost)) {
             room.players[0].isHost = true;
         }
@@ -223,5 +295,5 @@ io.on("connection", (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`Multiplayer server running on port ${PORT}`);
+    console.log(`Multiplayer authoritative server running on port ${PORT}`);
 });
