@@ -81,7 +81,7 @@ io.on("connection", (socket) => {
         let currentRoom = rooms[targetRoomCode];
 
         if (!currentRoom) {
-            rooms[targetRoomCode] = {
+            currentRoom = {
                 id: targetRoomCode,
                 players: [],
                 started: false,
@@ -91,7 +91,7 @@ io.on("connection", (socket) => {
                 currentTurnIndex: 0,
                 hasDrawnThisTurn: false
             };
-            currentRoom = rooms[targetRoomCode];
+            rooms[targetRoomCode] = currentRoom;
         }
 
         socket.join(targetRoomCode);
@@ -116,9 +116,9 @@ io.on("connection", (socket) => {
 
         console.log(`${playerName} (${socket.id}) joined room ${targetRoomCode}. Total: ${currentRoom.players.length}`);
 
-        // Start countdown when minimum players join
+        // FIX: Start the 20-second countdown immediately as soon as the first player creates/joins the table, 
+        // so players don't wait indefinitely if no one else joins.
         if (
-            currentRoom.players.length >= MIN_PLAYERS_PER_ROOM &&
             !currentRoom.countdown &&
             !currentRoom.started
         ) {
@@ -129,6 +129,8 @@ io.on("connection", (socket) => {
                 currentRoom.timerVal--;
                 io.to(targetRoomCode).emit("countdownUpdate", currentRoom.timerVal);
 
+                // Start game if timer hits 0 OR if max players limit is reached
+                // Note: If timer hits 0 with only 1 player, you can add a bot or start with 1 player depending on client setup.
                 if (currentRoom.timerVal <= 0 || currentRoom.players.length >= MAX_PLAYERS_PER_ROOM) {
                     if (currentRoom.countdown) {
                         clearInterval(currentRoom.countdown);
@@ -154,8 +156,6 @@ io.on("connection", (socket) => {
         }
     });
 
-    // SERVER VALIDATION: Player requests card draw
-   // SERVER VALIDATION: Player requests card draw
     socket.on("playerDraw", () => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
@@ -174,13 +174,10 @@ io.on("connection", (socket) => {
         }
 
         room.hasDrawnThisTurn = true;
-        
-        // Broadcast updated room state so all clients know a card was drawn this turn
         io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
         socket.emit("drawApproved");
     });
 
-    // SERVER VALIDATION: Player requests card discard / turn end
     socket.on("playerDiscard", () => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
@@ -198,7 +195,6 @@ io.on("connection", (socket) => {
             return;
         }
 
-        // Reset turn flags and rotate turn to next player
         room.hasDrawnThisTurn = false;
         room.currentTurnIndex = (room.currentTurnIndex + 1) % room.players.length;
 
@@ -206,7 +202,6 @@ io.on("connection", (socket) => {
 
         socket.emit("discardApproved");
 
-        // Broadcast updated room state and turn change
         io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
         io.to(roomCode).emit("turnChanged", {
             playerId: nextPlayer.id,
@@ -214,7 +209,7 @@ io.on("connection", (socket) => {
             currentTurnIndex: room.currentTurnIndex
         });
     });
-    // PROTECTED STATE SYNC: Only turn player can sync state mid-turn
+
     socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
@@ -238,7 +233,6 @@ io.on("connection", (socket) => {
         });
     });
 
-    // Game End & Drop Handlers
     socket.on("playerDeclared", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
@@ -269,13 +263,6 @@ io.on("connection", (socket) => {
         console.log(`Client disconnected: ${socket.id}`);
 
         room.players = room.players.filter((p) => p.id !== socket.id);
-
-        if (room.players.length < MIN_PLAYERS_PER_ROOM && room.countdown && !room.started) {
-            clearInterval(room.countdown);
-            room.countdown = null;
-            room.timerVal = COUNTDOWN_SECONDS;
-            io.to(roomCode).emit("countdownUpdate", COUNTDOWN_SECONDS);
-        }
 
         if (room.players.length === 0) {
             if (room.countdown) clearInterval(room.countdown);
