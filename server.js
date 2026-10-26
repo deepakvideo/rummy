@@ -254,52 +254,57 @@ io.on("connection", (socket) => {
         io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
     });
 
-    socket.on("playerDiscard", (data) => {
-        const roomCode = socket.roomCode;
-        if (!roomCode || !rooms[roomCode]) return;
+  socket.on("playerDiscard", (data) => {
+    const roomCode = socket.roomCode;
+    if (!roomCode || !rooms[roomCode]) return;
 
-        const room = rooms[roomCode];
-        if (!room.started) return;
+    const room = rooms[roomCode];
+    if (!room.started) return;
 
-        const turnPlayer = room.players[room.currentTurnIndex];
+    const turnPlayer = room.players[room.currentTurnIndex];
 
-        if (!turnPlayer || turnPlayer.id !== socket.id) {
-            socket.emit("discardRejected", { message: "Not your turn!" });
-            return;
-        }
+    if (!turnPlayer || turnPlayer.id !== socket.id) {
+        socket.emit("discardRejected", { message: "Not your turn!" });
+        return;
+    }
 
-        if (turnPlayer.dropped) {
-            socket.emit("discardRejected", { message: "You have dropped out of the game!" });
-            return;
-        }
+    if (turnPlayer.dropped) {
+        socket.emit("discardRejected", { message: "You have dropped out of the game!" });
+        return;
+    }
 
-        if (!room.hasDrawnThisTurn) {
-            socket.emit("discardRejected", { message: "Draw a card first before discarding!" });
-            return;
-        }
+    if (!room.hasDrawnThisTurn) {
+        socket.emit("discardRejected", { message: "Draw a card first before discarding!" });
+        return;
+    }
 
-        room.hasDrawnThisTurn = false;
-        if (data && data.gameData) {
-            room.gameData = data.gameData;
-        }
-        room.currentTurnIndex = getNextActivePlayer(room);
+    room.hasDrawnThisTurn = false;
+    
+    // Capture the exact updated gameData containing the new discard top card
+    if (data && data.gameData) {
+        room.gameData = data.gameData;
+    }
 
-        const nextPlayer = room.players[room.currentTurnIndex];
+    room.currentTurnIndex = getNextActivePlayer(room);
+    const nextPlayer = room.players[room.currentTurnIndex];
 
-        socket.emit("discardApproved");
-        socket.to(roomCode).emit("gameStateUpdated", {
-            gameData: room.gameData,
-            winnerName: room.winnerName,
-            wrongShowPlayer: room.wrongShowPlayer,
-            droppedPlayer: room.droppedPlayer
-        });
-        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
-        io.to(roomCode).emit("turnChanged", {
-            playerId: nextPlayer.id,
-            playerName: nextPlayer.name,
-            currentTurnIndex: room.currentTurnIndex
-        });
+    socket.emit("discardApproved");
+
+    // Broadcast the fresh gameData to all other players in the room immediately
+    socket.to(roomCode).emit("gameStateUpdated", {
+        gameData: room.gameData,
+        winnerName: room.winnerName,
+        wrongShowPlayer: room.wrongShowPlayer,
+        droppedPlayer: room.droppedPlayer
     });
+
+    io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
+    io.to(roomCode).emit("turnChanged", {
+        playerId: nextPlayer.id,
+        playerName: nextPlayer.name,
+        currentTurnIndex: room.currentTurnIndex
+    });
+});
 
     socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
