@@ -193,15 +193,20 @@ io.on("connection", (socket) => {
 
                     if (!currentRoom.started) {
                         currentRoom.started = true;
-                        currentRoom.currentTurnIndex = 0;
+                        
+                        currentRoom.currentTurnIndex = currentRoom.players.findIndex(p => !p.dropped);
+                        if (currentRoom.currentTurnIndex === -1) {
+                            currentRoom.currentTurnIndex = 0;
+                        }
+                        
                         currentRoom.hasDrawnThisTurn = false;
 
                         console.log(`Room ${targetRoomCode} started with ${currentRoom.players.length} players.`);
 
                         io.to(targetRoomCode).emit("gameStartSignal", getCleanRoomState(currentRoom));
                         io.to(targetRoomCode).emit("turnChanged", {
-                            playerId: currentRoom.players[0].id,
-                            playerName: currentRoom.players[0].name,
+                            playerId: currentRoom.players[currentRoom.currentTurnIndex].id,
+                            playerName: currentRoom.players[currentRoom.currentTurnIndex].name,
                             currentTurnIndex: currentRoom.currentTurnIndex
                         });
                     }
@@ -215,10 +220,17 @@ io.on("connection", (socket) => {
         if (!roomCode || !rooms[roomCode]) return;
 
         const room = rooms[roomCode];
+        if (!room.started) return;
+
         const turnPlayer = room.players[room.currentTurnIndex];
 
         if (!turnPlayer || turnPlayer.id !== socket.id) {
             socket.emit("drawRejected", { message: "Not your turn!" });
+            return;
+        }
+
+        if (turnPlayer.dropped) {
+            socket.emit("drawRejected", { message: "You have dropped out of the game!" });
             return;
         }
 
@@ -237,10 +249,17 @@ io.on("connection", (socket) => {
         if (!roomCode || !rooms[roomCode]) return;
 
         const room = rooms[roomCode];
+        if (!room.started) return;
+
         const turnPlayer = room.players[room.currentTurnIndex];
 
         if (!turnPlayer || turnPlayer.id !== socket.id) {
             socket.emit("discardRejected", { message: "Not your turn!" });
+            return;
+        }
+
+        if (turnPlayer.dropped) {
+            socket.emit("discardRejected", { message: "You have dropped out of the game!" });
             return;
         }
 
@@ -276,10 +295,8 @@ io.on("connection", (socket) => {
             return;
         }
 
+        // Only sync game data, keeping authoritative game lifecycle states secure
         room.gameData = state.gameData || "";
-        room.winnerName = state.winnerName || null;
-        room.wrongShowPlayer = state.wrongShowPlayer || null;
-        room.droppedPlayer = state.droppedPlayer || null;
 
         socket.to(roomCode).emit("gameStateUpdated", {
             gameData: room.gameData,
@@ -289,34 +306,95 @@ io.on("connection", (socket) => {
         });
     });
 
-    socket.on("playerDeclared", (data) => {
-        const roomCode = socket.roomCode;
-        if (!roomCode || !rooms[roomCode]) return;
+socket.on("playerDeclared", () => {
 
-        const room = rooms[roomCode];
-        if (room.winnerName) return;
+    const roomCode = socket.roomCode;
 
-        room.winnerName = data.winnerName;
-        io.to(roomCode).emit("playerDeclared", data);
-    });
+    if (!roomCode || !rooms[roomCode]) {
+        return;
+    }
 
-    socket.on("playerWrongShow", (data) => {
-        const roomCode = socket.roomCode;
-        if (!roomCode || !rooms[roomCode]) return;
+    const room = rooms[roomCode];
 
-        socket.to(roomCode).emit("playerWrongShow", data);
-    });
+    if (!room.started) {
+        return;
+    }
+
+    if (room.winnerName) {
+        return;
+    }
+
+    const turnPlayer =
+        room.players[room.currentTurnIndex];
+
+    if (
+        !turnPlayer ||
+        turnPlayer.id !== socket.id ||
+        turnPlayer.dropped
+    ) {
+        return;
+    }
+
+    room.winnerName = turnPlayer.name;
+
+    room.hasDrawnThisTurn = false;
+
+    io.to(roomCode).emit(
+        "playerDeclared",
+        {
+            winnerName: turnPlayer.name
+        }
+    );
+
+    io.to(roomCode).emit(
+        "roomUpdate",
+        getCleanRoomState(room)
+    );
+});
+
+  socket.on("playerWrongShow", (data) => {
+
+    const roomCode = socket.roomCode;
+
+    if (!roomCode || !rooms[roomCode])
+        return;
+
+    const room =
+        rooms[roomCode];
+
+    const player =
+        room.players.find(
+            p => p.id === socket.id
+        );
+
+    if (
+        !player ||
+        player.dropped
+    ) {
+        return;
+    }
+
+    socket.to(roomCode).emit(
+        "playerWrongShow",
+        data
+    );
+});
 
     socket.on("playerDropped", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
         const room = rooms[roomCode];
-        const player = room.players.find(p => p.id === socket.id);
+     const player = room.players.find(
+    p => p.id === socket.id
+);
 
-        if (player) {
-            player.dropped = true;
-        }
+if (!player) return;
+
+if (player.dropped) return;
+
+player.dropped = true;
+
 
         if (room.players[room.currentTurnIndex]?.id === socket.id) {
             room.hasDrawnThisTurn = false;
@@ -333,7 +411,7 @@ io.on("connection", (socket) => {
         io.to(roomCode).emit("playerDropped", data);
 
         const activePlayers = room.players.filter(p => !p.dropped);
-        if (room.started && activePlayers.length === 1) {
+        if (room.started && activePlayers.length === 1 && !room.winnerName) {
             room.winnerName = activePlayers[0].name;
             io.to(roomCode).emit("playerDeclared", {
                 winnerName: activePlayers[0].name
@@ -360,14 +438,17 @@ io.on("connection", (socket) => {
                 room.currentTurnIndex--;
             }
 
-            if (room.currentTurnIndex >= room.players.length && room.players.length > 0) {
+            if (room.currentTurnIndex >= room.players.length) {
                 room.currentTurnIndex = 0;
             }
 
             room.hasDrawnThisTurn = false;
 
             if (wasCurrentTurn && room.players.length > 0) {
-                room.currentTurnIndex = getNextActivePlayer(room);
+                if (room.currentTurnIndex >= room.players.length) {
+                    room.currentTurnIndex = 0;
+                }
+
                 const nextPlayer = room.players[room.currentTurnIndex];
 
                 io.to(roomCode).emit("turnChanged", {
@@ -398,7 +479,7 @@ io.on("connection", (socket) => {
         }
 
         const activePlayers = room.players.filter(p => !p.dropped);
-        if (room.started && activePlayers.length === 1) {
+        if (room.started && activePlayers.length === 1 && !room.winnerName) {
             room.winnerName = activePlayers[0].name;
             io.to(roomCode).emit("playerDeclared", {
                 winnerName: activePlayers[0].name
