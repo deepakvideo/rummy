@@ -215,26 +215,24 @@ io.on("connection", (socket) => {
         });
     });
     // PROTECTED STATE SYNC: Only turn player can sync state mid-turn
-    socket.on("syncGameState", (state) => {
+  socket.on("syncGameState", (state) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
         const room = rooms[roomCode];
         const turnPlayer = room.players[room.currentTurnIndex];
 
-        if (!turnPlayer || turnPlayer.id !== socket.id) {
-            socket.emit("syncRejected", { message: "Not your turn to modify state" });
-            return;
-        }
-
+        // Allow sync if it's the turn player OR if a player is dropping/wrong showing
         room.gameData = state.gameData || "";
         room.winnerName = state.winnerName || null;
         room.wrongShowPlayer = state.wrongShowPlayer || null;
+        room.droppedPlayer = state.droppedPlayer || null; // <-- ADD THIS
 
         socket.to(roomCode).emit("gameStateUpdated", {
             gameData: room.gameData,
             winnerName: room.winnerName,
-            wrongShowPlayer: room.wrongShowPlayer
+            wrongShowPlayer: room.wrongShowPlayer,
+            droppedPlayer: room.droppedPlayer // <-- ADD THIS
         });
     });
 
