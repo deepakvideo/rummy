@@ -215,7 +215,7 @@ io.on("connection", (socket) => {
         }
     });
 
-    socket.on("playerDraw", () => {
+    socket.on("playerDraw", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
@@ -240,11 +240,21 @@ io.on("connection", (socket) => {
         }
 
         room.hasDrawnThisTurn = true;
-        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
+        if (data && data.gameData) {
+            room.gameData = data.gameData;
+        }
+
         socket.emit("drawApproved");
+        socket.to(roomCode).emit("gameStateUpdated", {
+            gameData: room.gameData,
+            winnerName: room.winnerName,
+            wrongShowPlayer: room.wrongShowPlayer,
+            droppedPlayer: room.droppedPlayer
+        });
+        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
     });
 
-    socket.on("playerDiscard", () => {
+    socket.on("playerDiscard", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
@@ -269,12 +279,20 @@ io.on("connection", (socket) => {
         }
 
         room.hasDrawnThisTurn = false;
+        if (data && data.gameData) {
+            room.gameData = data.gameData;
+        }
         room.currentTurnIndex = getNextActivePlayer(room);
 
         const nextPlayer = room.players[room.currentTurnIndex];
 
         socket.emit("discardApproved");
-
+        socket.to(roomCode).emit("gameStateUpdated", {
+            gameData: room.gameData,
+            winnerName: room.winnerName,
+            wrongShowPlayer: room.wrongShowPlayer,
+            droppedPlayer: room.droppedPlayer
+        });
         io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
         io.to(roomCode).emit("turnChanged", {
             playerId: nextPlayer.id,
@@ -295,7 +313,6 @@ io.on("connection", (socket) => {
             return;
         }
 
-        // Only sync game data, keeping authoritative game lifecycle states secure
         room.gameData = state.gameData || "";
 
         socket.to(roomCode).emit("gameStateUpdated", {
@@ -306,95 +323,45 @@ io.on("connection", (socket) => {
         });
     });
 
-socket.on("playerDeclared", () => {
+    socket.on("playerDeclared", () => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
 
-    const roomCode = socket.roomCode;
+        const room = rooms[roomCode];
+        if (!room.started || room.winnerName) return;
 
-    if (!roomCode || !rooms[roomCode]) {
-        return;
-    }
+        const turnPlayer = room.players[room.currentTurnIndex];
+        if (!turnPlayer || turnPlayer.id !== socket.id || turnPlayer.dropped) return;
 
-    const room = rooms[roomCode];
+        room.winnerName = turnPlayer.name;
+        room.hasDrawnThisTurn = false;
 
-    if (!room.started) {
-        return;
-    }
-
-    if (room.winnerName) {
-        return;
-    }
-
-    const turnPlayer =
-        room.players[room.currentTurnIndex];
-
-    if (
-        !turnPlayer ||
-        turnPlayer.id !== socket.id ||
-        turnPlayer.dropped
-    ) {
-        return;
-    }
-
-    room.winnerName = turnPlayer.name;
-
-    room.hasDrawnThisTurn = false;
-
-    io.to(roomCode).emit(
-        "playerDeclared",
-        {
+        io.to(roomCode).emit("playerDeclared", {
             winnerName: turnPlayer.name
-        }
-    );
+        });
+        io.to(roomCode).emit("roomUpdate", getCleanRoomState(room));
+    });
 
-    io.to(roomCode).emit(
-        "roomUpdate",
-        getCleanRoomState(room)
-    );
-});
+    socket.on("playerWrongShow", (data) => {
+        const roomCode = socket.roomCode;
+        if (!roomCode || !rooms[roomCode]) return;
 
-  socket.on("playerWrongShow", (data) => {
+        const room = rooms[roomCode];
+        const player = room.players.find(p => p.id === socket.id);
+        if (!player || player.dropped) return;
 
-    const roomCode = socket.roomCode;
-
-    if (!roomCode || !rooms[roomCode])
-        return;
-
-    const room =
-        rooms[roomCode];
-
-    const player =
-        room.players.find(
-            p => p.id === socket.id
-        );
-
-    if (
-        !player ||
-        player.dropped
-    ) {
-        return;
-    }
-
-    socket.to(roomCode).emit(
-        "playerWrongShow",
-        data
-    );
-});
+        socket.to(roomCode).emit("playerWrongShow", data);
+    });
 
     socket.on("playerDropped", (data) => {
         const roomCode = socket.roomCode;
         if (!roomCode || !rooms[roomCode]) return;
 
         const room = rooms[roomCode];
-     const player = room.players.find(
-    p => p.id === socket.id
-);
+        const player = room.players.find(p => p.id === socket.id);
+        if (!player || player.dropped) return;
 
-if (!player) return;
-
-if (player.dropped) return;
-
-player.dropped = true;
-
+        player.dropped = true;
 
         if (room.players[room.currentTurnIndex]?.id === socket.id) {
             room.hasDrawnThisTurn = false;
